@@ -1,0 +1,12 @@
+{
+  "name": "mcu-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx wrangler dev",
+    "deploy": "source ../sawneebean_cams/.env && CLOUDFLARE_API_TOKEN=$CLOUDFLARE_TOKEN npx wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}
