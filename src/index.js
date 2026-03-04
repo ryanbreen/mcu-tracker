@@ -6,20 +6,30 @@ export default {
     // API routes
     if (path === '/mcu/api/state') {
       if (request.method === 'GET') {
-        const seen = await env.MCU_DATA.get('seen');
-        return new Response(seen || '[]', {
+        const raw = await env.MCU_DATA.get('seen');
+        let state = { seen: [], seenWithGus: [] };
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          // Migrate from old format (plain array) to new format
+          if (Array.isArray(parsed)) {
+            state.seen = parsed;
+          } else {
+            state = { seen: parsed.seen || [], seenWithGus: parsed.seenWithGus || [] };
+          }
+        }
+        return new Response(JSON.stringify(state), {
           headers: { 'Content-Type': 'application/json' },
         });
       }
       if (request.method === 'PUT') {
         const body = await request.json();
-        if (!Array.isArray(body)) {
-          return new Response(JSON.stringify({ error: 'Expected array' }), {
+        if (typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.seen) || !Array.isArray(body.seenWithGus)) {
+          return new Response(JSON.stringify({ error: 'Expected { seen: [], seenWithGus: [] }' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        await env.MCU_DATA.put('seen', JSON.stringify(body));
+        await env.MCU_DATA.put('seen', JSON.stringify({ seen: body.seen, seenWithGus: body.seenWithGus }));
         return new Response(JSON.stringify({ ok: true }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -125,6 +135,7 @@ const HTML = `<!DOCTYPE html>
   .progress {
     font-size: 0.95rem;
     color: #888;
+    line-height: 1.6;
   }
 
   .progress-bar {
@@ -182,7 +193,7 @@ const HTML = `<!DOCTYPE html>
   }
 
   .film.seen {
-    opacity: 0.55;
+    opacity: 0.5;
   }
 
   .checkbox {
@@ -197,9 +208,14 @@ const HTML = `<!DOCTYPE html>
     transition: all 0.2s;
   }
 
-  .film.seen .checkbox {
+  .checkbox.checked {
     background: #e62429;
     border-color: #e62429;
+  }
+
+  .checkbox.checked-gus {
+    background: #2e86de;
+    border-color: #2e86de;
   }
 
   .checkmark {
@@ -210,8 +226,26 @@ const HTML = `<!DOCTYPE html>
     line-height: 1;
   }
 
-  .film.seen .checkmark {
+  .checkbox.checked .checkmark,
+  .checkbox.checked-gus .checkmark {
     display: block;
+  }
+
+  .column-headers {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 0.75rem 0.25rem;
+    font-size: 0.7rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .col-label {
+    width: 22px;
+    text-align: center;
+    flex-shrink: 0;
   }
 
   .film-info {
@@ -249,7 +283,10 @@ const HTML = `<!DOCTYPE html>
 <div class="container">
   <header>
     <h1>MCU Film Tracker</h1>
-    <div class="progress"><span id="count">0</span> of <span id="total">0</span> films watched</div>
+    <div class="progress">
+      <span id="count">0</span> of <span id="total">0</span> films watched<br>
+      <span id="count-gus">0</span> watched with Gus
+    </div>
     <div class="progress-bar"><div class="progress-fill" id="bar"></div></div>
   </header>
   <main id="app"><div class="loading">Loading…</div></main>
@@ -257,13 +294,15 @@ const HTML = `<!DOCTYPE html>
 <script>
 const FILMS = ${JSON.stringify(FILMS)};
 let seen = new Set();
+let seenWithGus = new Set();
 let saving = false;
 
 async function loadState() {
   try {
     const res = await fetch('/mcu/api/state');
     const data = await res.json();
-    seen = new Set(data);
+    seen = new Set(data.seen || []);
+    seenWithGus = new Set(data.seenWithGus || []);
   } catch (e) {
     console.error('Failed to load state:', e);
   }
@@ -277,7 +316,7 @@ async function saveState() {
     await fetch('/mcu/api/state', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify([...seen]),
+      body: JSON.stringify({ seen: [...seen], seenWithGus: [...seenWithGus] }),
     });
   } catch (e) {
     console.error('Failed to save state:', e);
@@ -288,6 +327,13 @@ async function saveState() {
 function toggle(title) {
   if (seen.has(title)) seen.delete(title);
   else seen.add(title);
+  render();
+  saveState();
+}
+
+function toggleGus(title) {
+  if (seenWithGus.has(title)) seenWithGus.delete(title);
+  else seenWithGus.add(title);
   render();
   saveState();
 }
@@ -310,18 +356,29 @@ function render() {
       '<div class="phase-header">' +
         '<span class="phase-title">Phase ' + phase + '</span>' +
         '<span class="phase-count">' + phaseCount + ' / ' + films.length + '</span>' +
+      '</div>' +
+      '<div class="column-headers">' +
+        '<span class="col-label">Me</span>' +
+        '<span class="col-label">Gus</span>' +
       '</div>';
 
     films.forEach(f => {
+      const isSeen = seen.has(f.title);
+      const isGus = seenWithGus.has(f.title);
       const el = document.createElement('div');
-      el.className = 'film' + (seen.has(f.title) ? ' seen' : '');
-      el.onclick = () => toggle(f.title);
+      el.className = 'film' + (isSeen && isGus ? ' seen' : '');
       el.innerHTML =
-        '<div class="checkbox"><span class="checkmark">✓</span></div>' +
+        '<div class="checkbox' + (isSeen ? ' checked' : '') + '" data-type="seen"><span class="checkmark">✓</span></div>' +
+        '<div class="checkbox' + (isGus ? ' checked-gus' : '') + '" data-type="gus"><span class="checkmark">✓</span></div>' +
         '<div class="film-info">' +
           '<div class="film-title">' + f.title + '</div>' +
           '<div class="film-year">' + f.year + '</div>' +
         '</div>';
+      el.addEventListener('click', (e) => {
+        const cb = e.target.closest('[data-type]');
+        if (cb && cb.dataset.type === 'gus') toggleGus(f.title);
+        else toggle(f.title);
+      });
       section.appendChild(el);
     });
 
@@ -329,6 +386,7 @@ function render() {
   }
 
   document.getElementById('count').textContent = seen.size;
+  document.getElementById('count-gus').textContent = seenWithGus.size;
   document.getElementById('total').textContent = FILMS.length;
   document.getElementById('bar').style.width =
     (FILMS.length ? (seen.size / FILMS.length * 100) : 0) + '%';

@@ -7,13 +7,13 @@ Interactive MCU film checklist served by a Cloudflare Worker at `ryanbreen.com/m
 Single Cloudflare Worker (`src/index.js`) that does everything:
 - Serves the full HTML/CSS/JS frontend inline (no build step, no static assets)
 - Provides a JSON API for reading/writing watched state
-- Stores state in Cloudflare KV as a JSON array of film title strings
+- Stores state in Cloudflare KV as a JSON object with two arrays (seen, seenWithGus)
 
 ## Routes
 
 - `GET /mcu` — HTML page
-- `GET /mcu/api/state` — returns JSON array of watched film titles
-- `PUT /mcu/api/state` — accepts JSON array of watched film titles, writes to KV
+- `GET /mcu/api/state` — returns `{ seen: [...], seenWithGus: [...] }`
+- `PUT /mcu/api/state` — accepts `{ seen: [...], seenWithGus: [...] }`, writes to KV
 
 ## Cloudflare Resources
 
@@ -45,9 +45,12 @@ Films are hardcoded in `src/index.js` in the `FILMS` array, organized by MCU pha
 
 ## State Format
 
-KV key `seen` stores a JSON array of title strings, e.g.:
+KV key `seen` stores a JSON object with two arrays, e.g.:
 ```json
-["Iron Man", "The Avengers", "Black Panther"]
+{
+  "seen": ["Iron Man", "The Avengers", "Black Panther"],
+  "seenWithGus": ["Iron Man"]
+}
 ```
 
-The frontend uses a `Set` for O(1) lookups and syncs to KV on every toggle.
+The GET endpoint auto-migrates the old format (plain array) to the new object format. The frontend uses `Set` objects for O(1) lookups and syncs to KV on every toggle. Each film has two independent checkboxes: "Me" (red) and "Gus" (blue). Films dim when both are checked.
