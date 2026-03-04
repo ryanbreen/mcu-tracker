@@ -7,14 +7,13 @@ export default {
     if (path === '/mcu/api/state') {
       if (request.method === 'GET') {
         const raw = await env.MCU_DATA.get('seen');
-        let state = { seen: [], seenWithGus: [] };
+        let state = { seen: [], seenWithGus: [], gusReviews: {} };
         if (raw) {
           const parsed = JSON.parse(raw);
-          // Migrate from old format (plain array) to new format
           if (Array.isArray(parsed)) {
             state.seen = parsed;
           } else {
-            state = { seen: parsed.seen || [], seenWithGus: parsed.seenWithGus || [] };
+            state = { seen: parsed.seen || [], seenWithGus: parsed.seenWithGus || [], gusReviews: parsed.gusReviews || {} };
           }
         }
         return new Response(JSON.stringify(state), {
@@ -24,12 +23,12 @@ export default {
       if (request.method === 'PUT') {
         const body = await request.json();
         if (typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.seen) || !Array.isArray(body.seenWithGus)) {
-          return new Response(JSON.stringify({ error: 'Expected { seen: [], seenWithGus: [] }' }), {
+          return new Response(JSON.stringify({ error: 'Expected { seen: [], seenWithGus: [], gusReviews: {} }' }), {
             status: 400,
             headers: { 'Content-Type': 'application/json' },
           });
         }
-        await env.MCU_DATA.put('seen', JSON.stringify({ seen: body.seen, seenWithGus: body.seenWithGus }));
+        await env.MCU_DATA.put('seen', JSON.stringify({ seen: body.seen, seenWithGus: body.seenWithGus, gusReviews: body.gusReviews || {} }));
         return new Response(JSON.stringify({ ok: true }), {
           headers: { 'Content-Type': 'application/json' },
         });
@@ -182,17 +181,11 @@ const HTML = `<!DOCTYPE html>
     align-items: center;
     gap: 0.75rem;
     padding: 0.6rem 0.75rem;
-    border-radius: 8px;
     cursor: pointer;
-    transition: background 0.15s;
     user-select: none;
   }
 
-  .film:hover {
-    background: #12121f;
-  }
-
-  .film.seen {
+  .film-row.seen .film {
     opacity: 0.5;
   }
 
@@ -266,6 +259,52 @@ const HTML = `<!DOCTYPE html>
     color: #666;
   }
 
+  .film-row {
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+
+  .film-row:hover {
+    background: #12121f;
+  }
+
+  .review-display {
+    padding: 0.25rem 0.75rem 0.5rem 4.25rem;
+    font-size: 0.85rem;
+    color: #8899aa;
+    font-style: italic;
+    line-height: 1.4;
+  }
+
+  .review-editor {
+    padding: 0.25rem 0.75rem 0.6rem 4.25rem;
+  }
+
+  .review-editor textarea {
+    width: 100%;
+    background: #1a1a2e;
+    border: 1px solid #2e86de44;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem;
+    resize: vertical;
+    min-height: 60px;
+    outline: none;
+  }
+
+  .review-editor textarea:focus {
+    border-color: #2e86de;
+  }
+
+  .review-hint {
+    font-size: 0.7rem;
+    color: #555;
+    margin-top: 0.25rem;
+    text-align: right;
+  }
+
   .loading {
     text-align: center;
     padding: 3rem;
@@ -276,6 +315,7 @@ const HTML = `<!DOCTYPE html>
     body { padding: 1rem 0.5rem; }
     header h1 { font-size: 1.5rem; }
     .film { padding: 0.5rem; gap: 0.5rem; }
+    .review-display, .review-editor { padding-left: 2.75rem; }
   }
 </style>
 </head>
@@ -295,6 +335,8 @@ const HTML = `<!DOCTYPE html>
 const FILMS = ${JSON.stringify(FILMS)};
 let seen = new Set();
 let seenWithGus = new Set();
+let gusReviews = {};
+let expandedFilm = null;
 let saving = false;
 
 async function loadState() {
@@ -303,6 +345,7 @@ async function loadState() {
     const data = await res.json();
     seen = new Set(data.seen || []);
     seenWithGus = new Set(data.seenWithGus || []);
+    gusReviews = data.gusReviews || {};
   } catch (e) {
     console.error('Failed to load state:', e);
   }
@@ -316,7 +359,7 @@ async function saveState() {
     await fetch('/mcu/api/state', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seen: [...seen], seenWithGus: [...seenWithGus] }),
+      body: JSON.stringify({ seen: [...seen], seenWithGus: [...seenWithGus], gusReviews }),
     });
   } catch (e) {
     console.error('Failed to save state:', e);
@@ -335,6 +378,18 @@ function toggleGus(title) {
   if (seenWithGus.has(title)) seenWithGus.delete(title);
   else seenWithGus.add(title);
   render();
+  saveState();
+}
+
+function toggleExpand(title) {
+  expandedFilm = expandedFilm === title ? null : title;
+  render();
+}
+
+function saveReview(title, text) {
+  const trimmed = text.trim();
+  if (trimmed) gusReviews[title] = trimmed;
+  else delete gusReviews[title];
   saveState();
 }
 
@@ -365,8 +420,14 @@ function render() {
     films.forEach(f => {
       const isSeen = seen.has(f.title);
       const isGus = seenWithGus.has(f.title);
+      const review = gusReviews[f.title] || '';
+      const isExpanded = expandedFilm === f.title;
+
+      const row = document.createElement('div');
+      row.className = 'film-row' + (isSeen && isGus ? ' seen' : '');
+
       const el = document.createElement('div');
-      el.className = 'film' + (isSeen && isGus ? ' seen' : '');
+      el.className = 'film';
       el.innerHTML =
         '<div class="checkbox' + (isSeen ? ' checked' : '') + '" data-type="seen"><span class="checkmark">✓</span></div>' +
         '<div class="checkbox' + (isGus ? ' checked-gus' : '') + '" data-type="gus"><span class="checkmark">✓</span></div>' +
@@ -376,10 +437,37 @@ function render() {
         '</div>';
       el.addEventListener('click', (e) => {
         const cb = e.target.closest('[data-type]');
-        if (cb && cb.dataset.type === 'gus') toggleGus(f.title);
-        else toggle(f.title);
+        if (cb && cb.dataset.type === 'gus') { toggleGus(f.title); return; }
+        if (cb && cb.dataset.type === 'seen') { toggle(f.title); return; }
+        if (isGus) toggleExpand(f.title);
       });
-      section.appendChild(el);
+      row.appendChild(el);
+
+      if (isGus && !isExpanded && review) {
+        const rd = document.createElement('div');
+        rd.className = 'review-display';
+        rd.textContent = '\\u201c' + review + '\\u201d';
+        rd.addEventListener('click', () => toggleExpand(f.title));
+        row.appendChild(rd);
+      }
+
+      if (isGus && isExpanded) {
+        const ed = document.createElement('div');
+        ed.className = 'review-editor';
+        ed.innerHTML = '<textarea placeholder="Gus\\u2019s review\\u2026"></textarea><div class="review-hint">Click away to save</div>';
+        const ta = ed.querySelector('textarea');
+        ta.value = review;
+        ta.addEventListener('click', (e) => e.stopPropagation());
+        ta.addEventListener('blur', () => {
+          saveReview(f.title, ta.value);
+          expandedFilm = null;
+          render();
+        });
+        row.appendChild(ed);
+        setTimeout(() => ta.focus(), 0);
+      }
+
+      section.appendChild(row);
     });
 
     app.appendChild(section);
